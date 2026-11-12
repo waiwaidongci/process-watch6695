@@ -31,5 +31,27 @@ def seed():
                     run=ControlRun(name=rname,baseline_id=baseline.id,smoothing=.2,ewma_l=3.,status="completed",result=analyze_process(rows,baseline,stream,.2,3.),owner="沈微 · 工艺分析师")
                     db.add(run);db.flush()
                     if idx==1:db.add(Investigation(run_id=run.id,title="T-01基准复核档案",finding="已核对控制界限和规格界限来源，统计结果保留完整假设说明。",action="继续独立采样并按周复查，不将单次能力值作为保证。",status="approved",owner="沈微 · 工艺分析师",reviewer="程砚 · 质量负责人",review_note="批准此研究记录归档，能力解释仍以稳定及正态近似为前提。",reviewed_at=datetime.now(timezone.utc).isoformat()))
+        # T-05：含两次停机/漏测断档的涂层流（序号缺失且时间断档），演示分段控制图与分段能力。
+        code="T-05";gap_stream=db.query(MeasurementStream).filter_by(code=code).first()
+        if not gap_stream:
+            gap_stream=MeasurementStream(code=code,name="停机分段观察",description="每10分钟采样一次；含两次停机漏测：序号120–149与200–219缺失，采样时间同步断档。断档处图线断开、段首极差留空、EWMA从冻结基线重启；能力按段独立计算。规格18–22μm。",source="qt-coating-202611-gap.csv",lsl=18.,usl=22.,unit="μm")
+            db.add(gap_stream);db.flush()
+        rng=random.Random(715);existing=set(x[0] for x in db.query(Measurement.source_key).filter_by(stream_id=gap_stream.id))
+        # 序号1..119、150..199、220..240；时钟按序号推进，缺失序号造成>10分钟的时间断档。
+        for i in list(range(1,120))+list(range(150,200))+list(range(220,241)):
+            key=f"{code}-{i:04}"
+            if key not in existing:
+                value=round(rng.gauss(20.,.25),4)
+                db.add(Measurement(stream_id=gap_stream.id,source_key=key,sequence=i,measured_at=(datetime(2026,11,1,tzinfo=timezone.utc)+timedelta(minutes=10*(i-1))).isoformat(),value=value))
+        db.flush()
+        bname=code+" · 前80点冻结基线";gap_baseline=db.query(Baseline).filter_by(name=bname).first()
+        gap_rows=db.query(Measurement).filter_by(stream_id=gap_stream.id).order_by(Measurement.sequence).all()
+        if not gap_baseline:
+            gap_baseline=Baseline(name=bname,stream_id=gap_stream.id,sample_count=80,snapshot=freeze_measurements(gap_rows,80),owner="沈微 · 工艺分析师")
+            db.add(gap_baseline);db.flush()
+        rname=code+" · 停机分段观察";gap_run=db.query(ControlRun).filter_by(name=rname).first()
+        if not gap_run:
+            db.add(ControlRun(name=rname,baseline_id=gap_baseline.id,smoothing=.2,ewma_l=3.,status="completed",result=analyze_process(gap_rows,gap_baseline,gap_stream,.2,3.),owner="沈微 · 工艺分析师"))
+            db.flush()
         db.commit();print(json.dumps({m.__tablename__:db.query(m).count() for m in [User,MeasurementStream,Measurement,Baseline,ControlRun,Investigation]},ensure_ascii=False))
 if __name__=="__main__":seed()
